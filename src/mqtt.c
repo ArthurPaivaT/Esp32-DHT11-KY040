@@ -23,6 +23,7 @@
 #define TAG "MQTT"
 
 extern xSemaphoreHandle conexaoMQTTSemaphore;
+extern int ledValue;
 esp_mqtt_client_handle_t client;
 
 static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event)
@@ -35,7 +36,7 @@ static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event)
     case MQTT_EVENT_CONNECTED:
         ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
         xSemaphoreGive(conexaoMQTTSemaphore);
-        msg_id = esp_mqtt_client_subscribe(client, "servidor/resposta", 0);
+        msg_id = esp_mqtt_client_subscribe(client, "v1/devices/me/rpc/request/+", 0);
         break;
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
@@ -54,6 +55,14 @@ static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event)
         ESP_LOGI(TAG, "MQTT_EVENT_DATA");
         printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
         printf("DATA=%.*s\r\n", event->data_len, event->data);
+        if (ledValue > 2)
+        {
+            ledValue = 0;
+        }
+        else
+        {
+            ledValue++;
+        }
         break;
     case MQTT_EVENT_ERROR:
         ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
@@ -85,5 +94,5 @@ void mqtt_start()
 void mqtt_envia_mensagem(char *topico, char *mensagem)
 {
     int message_id = esp_mqtt_client_publish(client, topico, mensagem, 0, 1, 0);
-    ESP_LOGI(TAG, "Mesnagem enviada, ID: %d", message_id);
+    ESP_LOGI(TAG, "Mensagem enviada, ID: %d", message_id);
 }

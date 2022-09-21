@@ -30,9 +30,18 @@ rotary_encoder_info_t info = {0};
 
 xSemaphoreHandle conexaoWifiSemaphore;
 xSemaphoreHandle conexaoMQTTSemaphore;
+int ledValue;
 
 float roomTemperature;
 float referenceTemperature;
+
+int rotaryPosition;
+
+#define MAX(x, y) (((x) > (y)) ? (x) : (y))
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
+
+#define TRUE "true"
+#define FALSE "false"
 
 void conectadoWifi(void *params)
 {
@@ -49,29 +58,52 @@ void conectadoWifi(void *params)
 void trataComunicacaoComServidor(void *params)
 {
     char mensagem[50];
-    struct dht11_reading dht11_info;
+    char exceededTemperature[6];
+    char jsonAtributos[100];
     if (xSemaphoreTake(conexaoMQTTSemaphore, portMAX_DELAY))
     {
         while (true)
         {
-            dht11_info = DHT11_read();
-            printf("Temperature is %d \n", dht11_info.temperature);
-            printf("Humidity is %d\n", dht11_info.humidity);
-            printf("Status code is %d\n", dht11_info.status);
-            if (dht11_info.status == 0)
-            {
+            sprintf(mensagem, "{\"temperature\": %.2f, \"reference\": %.2f}", roomTemperature, referenceTemperature);
+            printf("sending %s\n", mensagem);
+            mqtt_envia_mensagem("v1/devices/me/telemetry", mensagem);
 
-                float temperatura = 20.0 + (float)rand() / (float)(RAND_MAX / 10.0);
-                sprintf(mensagem, "{\"temperature\": %d, \"humidity\": %d}", dht11_info.temperature, dht11_info.humidity);
-                printf("sending %s\n", mensagem);
-                mqtt_envia_mensagem("v1/devices/me/telemetry", mensagem);
-                vTaskDelay(3000 / portTICK_PERIOD_MS);
+            if (roomTemperature > referenceTemperature)
+            {
+                strcpy(exceededTemperature, TRUE);
             }
             else
             {
-                printf("Skipping\n");
-                vTaskDelay(500 / portTICK_PERIOD_MS);
+                strcpy(exceededTemperature, FALSE);
             }
+
+            printf("ledValue %d\n", ledValue);
+
+            sprintf(jsonAtributos, "{\"rotaryPosition\": %d, \"exceededTemperature\": %s}", rotaryPosition, exceededTemperature);
+            printf("sending %s\n", jsonAtributos);
+            mqtt_envia_mensagem("v1/devices/me/attributes", jsonAtributos);
+            vTaskDelay(3000 / portTICK_PERIOD_MS);
+        }
+    }
+}
+
+void temperatureReader(void *params)
+{
+    struct dht11_reading dht11_info;
+    while (true)
+    {
+        dht11_info = DHT11_read();
+        printf("Status code is %d\n", dht11_info.status);
+        if (dht11_info.status == 0)
+        {
+            roomTemperature = dht11_info.temperature;
+            printf("temperature is %.2f\n", roomTemperature);
+            vTaskDelay(3000 / portTICK_PERIOD_MS);
+        }
+        else
+        {
+            printf("Failed to read temperature\n");
+            vTaskDelay(500 / portTICK_PERIOD_MS);
         }
     }
 }
@@ -86,6 +118,8 @@ void rotaryReader(void *params)
         rotary_encoder_event_t event = {0};
         if (xQueueReceive(event_queue, &event, 1000 / portTICK_PERIOD_MS) == pdTRUE)
         {
+            rotaryPosition = event.state.position;
+            referenceTemperature = MAX(0, rotaryPosition * 5);
             ESP_LOGI(TAG, "Event: position %d, direction %s", event.state.position,
                      event.state.direction ? (event.state.direction == ROTARY_ENCODER_DIRECTION_CLOCKWISE ? "CW" : "CCW") : "NOT_SET");
         }
@@ -143,6 +177,8 @@ void app_main(void)
 
     xTaskCreate(&rotaryReader, "Leitura do codificador rotativo", 4096, NULL, 1, NULL);
     printf("rotaryReader created\n");
+    xTaskCreate(&temperatureReader, "Leitura de temperatura", 4096, NULL, 1, NULL);
+    printf("temperatureReader created\n");
     xTaskCreate(&conectadoWifi, "Conexão ao MQTT", 4096, NULL, 1, NULL);
     printf("conectadoWifi created\n");
     xTaskCreate(&trataComunicacaoComServidor, "Comunicação com Broker", 4096, NULL, 1, NULL);
