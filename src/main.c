@@ -209,7 +209,7 @@ void systemUpdateHandler()
 
     ledc_fade_func_install(0);
 
-    while (true)
+    while (true) // Grava a posição do rotary apenas a cada 3 segundos se houver mudança
     {
         if (previousRotaryPosition != rotaryPosition)
         {
