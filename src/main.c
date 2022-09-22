@@ -84,7 +84,7 @@ void trataComunicacaoComServidor(void *params)
 
             printf("ledValue %d\n", ledValue);
 
-            sprintf(jsonAtributos, "{\"rotaryPosition\": %d, \"exceededTemperature\": %s}", rotaryPosition, exceededTemperature);
+            sprintf(jsonAtributos, "{\"rotaryPosition\": %d, \"exceededTemperature\": %s, \"ledValue\": %d}", rotaryPosition, exceededTemperature, ledValue);
             printf("sending %s\n", jsonAtributos);
             mqtt_envia_mensagem("v1/devices/me/attributes", jsonAtributos);
             vTaskDelay(3000 / portTICK_PERIOD_MS);
