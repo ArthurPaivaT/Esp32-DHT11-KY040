@@ -25,39 +25,80 @@
 #define LED_1 2
 
 rotary_encoder_info_t info = {0};
-
 #define ENABLE_HALF_STEPS false // Set to true to enable tracking of rotary encoder at half step resolution
 #define RESET_AT 0              // Set to a positive non-zero number to reset the position if this value is exceeded
 #define FLIP_DIRECTION false    // Set to true to reverse the clockwise/counterclockwise sense
 
 xSemaphoreHandle conexaoWifiSemaphore;
 xSemaphoreHandle conexaoMQTTSemaphore;
-int ledValue;
 
+int ledValue;
 float roomTemperature;
 float referenceTemperature;
-
 int rotaryPosition;
 int previousRotaryPosition;
 
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
-
 #define TRUE "true"
 #define FALSE "false"
 
 float le_valor_nvs();
+void conectadoWifi(void *params);
+void trataComunicacaoComServidor(void *params);
+void temperatureReader(void *params);
+void rotaryReader(void *params);
+void grava_valor_nvs(int32_t valor);
+void systemUpdateHandler();
 
-void conectadoWifi(void *params)
+void app_main(void)
 {
-    while (true)
+
+    // esp32-rotary-encoder requires that the GPIO ISR service is installed before calling rotary_encoder_register()
+    ESP_ERROR_CHECK(gpio_install_isr_service(0));
+
+    // Initialise the rotary encoder device with the GPIOs for A and B signals
+    ESP_ERROR_CHECK(rotary_encoder_init(&info, ROT_ENC_A_GPIO, ROT_ENC_B_GPIO));
+    ESP_ERROR_CHECK(rotary_encoder_enable_half_steps(&info, ENABLE_HALF_STEPS));
+#ifdef FLIP_DIRECTION
+    ESP_ERROR_CHECK(rotary_encoder_flip_direction(&info));
+#endif
+
+    // Create a queue for events from the rotary encoder driver.
+    // Tasks can read from this queue to receive up to date position information.
+    QueueHandle_t event_queue = rotary_encoder_create_queue();
+    info.state.position = le_valor_nvs();
+    rotaryPosition = info.state.position;
+    referenceTemperature = MAX(0, rotaryPosition * 5);
+    ESP_ERROR_CHECK(rotary_encoder_set_queue(&info, event_queue));
+
+    DHT11_init(GPIO_NUM_4);
+
+    // Inicializa o NVS
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
-        if (xSemaphoreTake(conexaoWifiSemaphore, portMAX_DELAY))
-        {
-            // Processamento Internet
-            mqtt_start();
-        }
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
     }
+    ESP_ERROR_CHECK(ret);
+
+    conexaoWifiSemaphore = xSemaphoreCreateBinary();
+    conexaoMQTTSemaphore = xSemaphoreCreateBinary();
+
+    wifi_start();
+    printf("wifi_started\n");
+
+    xTaskCreate(&conectadoWifi, "Conexão ao MQTT", 4096, NULL, 1, NULL);
+    printf("conectadoWifi created\n");
+    xTaskCreate(&rotaryReader, "Leitura do codificador rotativo", 4096, NULL, 1, NULL);
+    printf("rotaryReader created\n");
+    xTaskCreate(&temperatureReader, "Leitura de temperatura", 4096, NULL, 1, NULL);
+    printf("temperatureReader created\n");
+    xTaskCreate(&trataComunicacaoComServidor, "Comunicação com Broker", 4096, NULL, 1, NULL);
+    printf("trataComunicacaoComServidor created\n");
+    xTaskCreate(&systemUpdateHandler, "Atualizador Led", 4096, NULL, 1, NULL);
+    printf("ledUpdater created\n");
 }
 
 void trataComunicacaoComServidor(void *params)
@@ -146,8 +187,6 @@ void rotaryReader(void *params)
     }
 }
 
-void grava_valor_nvs(int32_t valor);
-
 void systemUpdateHandler()
 {
     ledc_timer_config_t timer_config = {
@@ -180,55 +219,6 @@ void systemUpdateHandler()
         ledc_set_fade_time_and_start(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, (255 / 3) * ledValue, 100, LEDC_FADE_WAIT_DONE);
         vTaskDelay(3000 / portTICK_PERIOD_MS);
     }
-}
-
-void app_main(void)
-{
-
-    // esp32-rotary-encoder requires that the GPIO ISR service is installed before calling rotary_encoder_register()
-    ESP_ERROR_CHECK(gpio_install_isr_service(0));
-
-    // Initialise the rotary encoder device with the GPIOs for A and B signals
-    ESP_ERROR_CHECK(rotary_encoder_init(&info, ROT_ENC_A_GPIO, ROT_ENC_B_GPIO));
-    ESP_ERROR_CHECK(rotary_encoder_enable_half_steps(&info, ENABLE_HALF_STEPS));
-#ifdef FLIP_DIRECTION
-    ESP_ERROR_CHECK(rotary_encoder_flip_direction(&info));
-#endif
-
-    // Create a queue for events from the rotary encoder driver.
-    // Tasks can read from this queue to receive up to date position information.
-    QueueHandle_t event_queue = rotary_encoder_create_queue();
-    info.state.position = le_valor_nvs();
-    rotaryPosition = info.state.position;
-    referenceTemperature = MAX(0, rotaryPosition * 5);
-    ESP_ERROR_CHECK(rotary_encoder_set_queue(&info, event_queue));
-
-    DHT11_init(GPIO_NUM_4);
-
-    // Inicializa o NVS
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
-    {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-
-    conexaoWifiSemaphore = xSemaphoreCreateBinary();
-    conexaoMQTTSemaphore = xSemaphoreCreateBinary();
-    wifi_start();
-    printf("wifi_started\n");
-
-    xTaskCreate(&rotaryReader, "Leitura do codificador rotativo", 4096, NULL, 1, NULL);
-    printf("rotaryReader created\n");
-    xTaskCreate(&temperatureReader, "Leitura de temperatura", 4096, NULL, 1, NULL);
-    printf("temperatureReader created\n");
-    xTaskCreate(&conectadoWifi, "Conexão ao MQTT", 4096, NULL, 1, NULL);
-    printf("conectadoWifi created\n");
-    xTaskCreate(&trataComunicacaoComServidor, "Comunicação com Broker", 4096, NULL, 1, NULL);
-    printf("trataComunicacaoComServidor created\n");
-    xTaskCreate(&systemUpdateHandler, "Atualizador Led", 4096, NULL, 1, NULL);
-    printf("ledUpdater created\n");
 }
 
 float le_valor_nvs()
@@ -297,4 +287,16 @@ void grava_valor_nvs(int32_t valor)
     }
     nvs_commit(particao_padrao_handle);
     nvs_close(particao_padrao_handle);
+}
+
+void conectadoWifi(void *params)
+{
+    while (true)
+    {
+        if (xSemaphoreTake(conexaoWifiSemaphore, portMAX_DELAY))
+        {
+            // Processamento Internet
+            mqtt_start();
+        }
+    }
 }
