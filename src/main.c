@@ -16,11 +16,13 @@
 #include "mqtt.h"
 #include "dht11.h"
 #include "rotary_encoder.h"
+#include "driver/ledc.h"
 
 #define TAG "MAIN"
 
 #define ROT_ENC_A_GPIO 15
 #define ROT_ENC_B_GPIO 14
+#define LED_1 2
 
 rotary_encoder_info_t info = {0};
 
@@ -36,12 +38,15 @@ float roomTemperature;
 float referenceTemperature;
 
 int rotaryPosition;
+int previousRotaryPosition;
 
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 #define TRUE "true"
 #define FALSE "false"
+
+float le_valor_nvs();
 
 void conectadoWifi(void *params)
 {
@@ -141,6 +146,42 @@ void rotaryReader(void *params)
     }
 }
 
+void grava_valor_nvs(int32_t valor);
+
+void systemUpdateHandler()
+{
+    ledc_timer_config_t timer_config = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = LEDC_TIMER_8_BIT,
+        .timer_num = LEDC_TIMER_0,
+        .freq_hz = 1000,
+        .clk_cfg = LEDC_AUTO_CLK};
+    ledc_timer_config(&timer_config);
+
+    // Configuração do Canal
+    ledc_channel_config_t channel_config = {
+        .gpio_num = LED_1,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = LEDC_CHANNEL_0,
+        .timer_sel = LEDC_TIMER_0,
+        .duty = 0,
+        .hpoint = 0};
+    ledc_channel_config(&channel_config);
+
+    ledc_fade_func_install(0);
+
+    while (true)
+    {
+        if (previousRotaryPosition != rotaryPosition)
+        {
+            grava_valor_nvs(rotaryPosition);
+        }
+        previousRotaryPosition = rotaryPosition;
+        ledc_set_fade_time_and_start(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, (255 / 3) * ledValue, 100, LEDC_FADE_WAIT_DONE);
+        vTaskDelay(3000 / portTICK_PERIOD_MS);
+    }
+}
+
 void app_main(void)
 {
 
@@ -157,6 +198,9 @@ void app_main(void)
     // Create a queue for events from the rotary encoder driver.
     // Tasks can read from this queue to receive up to date position information.
     QueueHandle_t event_queue = rotary_encoder_create_queue();
+    info.state.position = le_valor_nvs();
+    rotaryPosition = info.state.position;
+    referenceTemperature = MAX(0, rotaryPosition * 5);
     ESP_ERROR_CHECK(rotary_encoder_set_queue(&info, event_queue));
 
     DHT11_init(GPIO_NUM_4);
@@ -183,4 +227,74 @@ void app_main(void)
     printf("conectadoWifi created\n");
     xTaskCreate(&trataComunicacaoComServidor, "Comunicação com Broker", 4096, NULL, 1, NULL);
     printf("trataComunicacaoComServidor created\n");
+    xTaskCreate(&systemUpdateHandler, "Atualizador Led", 4096, NULL, 1, NULL);
+    printf("ledUpdater created\n");
+}
+
+float le_valor_nvs()
+{
+    // Inicia o acesso à partição padrão nvs
+    ESP_ERROR_CHECK(nvs_flash_init());
+
+    // Inicia o acesso à partição personalizada
+    // ESP_ERROR_CHECK(nvs_flash_init_partition("DadosNVS"));
+
+    int32_t valor = 0;
+    nvs_handle particao_padrao_handle;
+
+    // Abre o acesso à partição nvs
+    esp_err_t res_nvs = nvs_open("armazenamento", NVS_READONLY, &particao_padrao_handle);
+
+    // Abre o acesso à partição DadosNVS
+    // esp_err_t res_nvs = nvs_open_from_partition("DadosNVS", "armazenamento", NVS_READONLY, &particao_padrao_handle);
+
+    if (res_nvs == ESP_ERR_NVS_NOT_FOUND)
+    {
+        ESP_LOGE("NVS", "Namespace: armazenamento, não encontrado");
+    }
+    else
+    {
+        esp_err_t res = nvs_get_i32(particao_padrao_handle, "rotation", &valor);
+
+        switch (res) // Se não for possível ler uma temperatura armazenada, usa 30 como default
+        {
+        case ESP_OK:
+            printf("Valor armazenado: %d\n", valor);
+            break;
+        case ESP_ERR_NOT_FOUND:
+            ESP_LOGE("NVS", "Valor não encontrado");
+            return 30;
+        default:
+            ESP_LOGE("NVS", "Erro ao acessar o NVS (%s)", esp_err_to_name(res));
+            return 30;
+            break;
+        }
+
+        nvs_close(particao_padrao_handle);
+    }
+    return (float)valor;
+}
+
+void grava_valor_nvs(int32_t valor)
+{
+    printf("Gravando %d", valor);
+    ESP_ERROR_CHECK(nvs_flash_init());
+    // ESP_ERROR_CHECK(nvs_flash_init_partition("DadosNVS"));
+
+    nvs_handle particao_padrao_handle;
+
+    esp_err_t res_nvs = nvs_open("armazenamento", NVS_READWRITE, &particao_padrao_handle);
+    // esp_err_t res_nvs = nvs_open_from_partition("DadosNVS", "armazenamento", NVS_READWRITE, &particao_padrao_handle);
+
+    if (res_nvs == ESP_ERR_NVS_NOT_FOUND)
+    {
+        ESP_LOGE("NVS", "Namespace: armazenamento, não encontrado");
+    }
+    esp_err_t res = nvs_set_i32(particao_padrao_handle, "rotation", valor);
+    if (res != ESP_OK)
+    {
+        ESP_LOGE("NVS", "Não foi possível escrever no NVS (%s)", esp_err_to_name(res));
+    }
+    nvs_commit(particao_padrao_handle);
+    nvs_close(particao_padrao_handle);
 }
