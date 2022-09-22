@@ -277,7 +277,7 @@ float le_valor_nvs()
 
 void grava_valor_nvs(int32_t valor)
 {
-    printf("Gravando %d", valor);
+    printf("Gravando %d\n", valor);
     ESP_ERROR_CHECK(nvs_flash_init());
     // ESP_ERROR_CHECK(nvs_flash_init_partition("DadosNVS"));
 

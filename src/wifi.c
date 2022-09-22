@@ -13,9 +13,9 @@
 #include "lwip/err.h"
 #include "lwip/sys.h"
 
-#define WIFI_SSID "paiva 5g"
-#define WIFI_PASS "tartaruga"
-#define WIFI_MAXIMUM_RETRY 3
+#define WIFI_SSID CONFIG_ESP_WIFI_SSID
+#define WIFI_PASS CONFIG_ESP_WIFI_PASSWORD
+#define WIFI_MAXIMUM_RETRY CONFIG_ESP_MAXIMUM_RETRY
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT BIT1
